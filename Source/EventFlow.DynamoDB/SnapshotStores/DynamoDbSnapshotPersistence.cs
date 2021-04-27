@@ -21,7 +21,11 @@
 // IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 // CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+using Amazon.DynamoDBv2;
+using Amazon.DynamoDBv2.DataModel;
+using Amazon.DynamoDBv2.DocumentModel;
 using EventFlow.Core;
+using EventFlow.DynamoDb.ValueObjects;
 using EventFlow.Extensions;
 using EventFlow.Logs;
 using EventFlow.Snapshots;
@@ -31,19 +35,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Amazon.DynamoDBv2;
-using Amazon.DynamoDBv2.DataModel;
-using Amazon.DynamoDBv2.DocumentModel;
-using Amazon.DynamoDBv2.Model;
-using EventFlow.DynamoDb.ValueObjects;
 
 namespace EventFlow.DynamoDb.SnapshotStores
 {
     public class DynamoDbSnapshotPersistence : ISnapshotPersistence
     {
-        private static string SnapShotsCollectionName = "snapShots";
         private readonly ILog _log;
-        private readonly IAmazonDynamoDB _amazonDynamoDb;
         private readonly IDynamoDBContext _dynamoDbContext;
 
         public DynamoDbSnapshotPersistence(
@@ -51,8 +48,7 @@ namespace EventFlow.DynamoDb.SnapshotStores
             IAmazonDynamoDB amazonDynamoDb)
         {
             _log = log;
-            _amazonDynamoDb = amazonDynamoDb;
-            _dynamoDbContext = new DynamoDBContext(_amazonDynamoDb);
+            _dynamoDbContext = new DynamoDBContext(amazonDynamoDb);
         }
 
         public async Task<CommittedSnapshot> GetSnapshotAsync(
@@ -64,25 +60,33 @@ namespace EventFlow.DynamoDb.SnapshotStores
             var queryFilter = new ScanFilter();
             queryFilter.AddCondition(nameof(DynamoDbSnapshotDataModel.AggregateName), ScanOperator.Equal, aggregateType.GetAggregateName().Value);
             queryFilter.AddCondition(nameof(DynamoDbSnapshotDataModel.AggregateId), ScanOperator.Equal, identity.Value);
-            
-            var result = await _dynamoDbContext.FromScanAsync<DynamoDbSnapshotDataModel>(new ScanOperationConfig
+
+            var search = _dynamoDbContext.FromScanAsync<DynamoDbSnapshotDataModel>(new ScanOperationConfig
             {
                 Filter = queryFilter,
-                Limit = 1,
-                ConditionalOperator = ConditionalOperatorValues.And
-            }).GetNextSetAsync(cancellationToken);
+                Limit = 25,
+                ConditionalOperator = ConditionalOperatorValues.And,
+            });
 
-            var mongoDbSnapshotDataModel = result
+            List<DynamoDbSnapshotDataModel> dataModels = new List<DynamoDbSnapshotDataModel>();
+
+            do
+            {
+                dataModels.AddRange(await search.GetNextSetAsync(cancellationToken));
+            } while (!search.IsDone);
+
+            var snapshotDataModel = dataModels
+                .OrderByDescending(m => m.AggregateSequenceNumber)
                 .FirstOrDefault();
 
-            if (mongoDbSnapshotDataModel == null)
+            if (snapshotDataModel == null)
             {
                 return null;
             }
 
             return new CommittedSnapshot(
-                mongoDbSnapshotDataModel.Metadata,
-                mongoDbSnapshotDataModel.Data);
+                snapshotDataModel.Metadata,
+                snapshotDataModel.Data);
         }
 
         public async Task SetSnapshotAsync(
@@ -91,9 +95,9 @@ namespace EventFlow.DynamoDb.SnapshotStores
             SerializedSnapshot serializedSnapshot,
             CancellationToken cancellationToken)
         {
-            var mongoDbSnapshotDataModel = new MongoDbSnapshotDataModel
+            var snapshotDataModel = new DynamoDbSnapshotDataModel
             {
-                _id = ObjectId.GenerateNewId(DateTime.UtcNow),
+                Id = Guid.NewGuid().ToString(),
                 AggregateId = identity.Value,
                 AggregateName = aggregateType.GetAggregateName().Value,
                 AggregateSequenceNumber = serializedSnapshot.Metadata.AggregateSequenceNumber,
@@ -101,44 +105,102 @@ namespace EventFlow.DynamoDb.SnapshotStores
                 Data = serializedSnapshot.SerializedData,
             };
 
-            var collection = _amazonDynamoDb.GetCollection<MongoDbSnapshotDataModel>(SnapShotsCollectionName);
-            var filterBuilder = Builders<MongoDbSnapshotDataModel>.Filter;
+            var scanFilter = new ScanFilter();
+            scanFilter.AddCondition(nameof(DynamoDbSnapshotDataModel.AggregateName), ScanOperator.Equal, aggregateType.GetAggregateName().Value);
+            scanFilter.AddCondition(nameof(DynamoDbSnapshotDataModel.AggregateId), ScanOperator.Equal, identity.Value);
+            scanFilter.AddCondition(nameof(DynamoDbSnapshotDataModel.AggregateSequenceNumber), ScanOperator.Equal, serializedSnapshot.Metadata.AggregateSequenceNumber);
 
-            var filter = filterBuilder.Eq(model => model.AggregateName, aggregateType.GetAggregateName().Value) &
-                         filterBuilder.Eq(model => model.AggregateId, identity.Value) &
-                         filterBuilder.Eq(model => model.AggregateSequenceNumber, serializedSnapshot.Metadata.AggregateSequenceNumber);
+            var search = _dynamoDbContext.FromScanAsync<DynamoDbSnapshotDataModel>(new ScanOperationConfig
+            {
+                Filter = scanFilter,
+                Limit = 25,
+                ConditionalOperator = ConditionalOperatorValues.And,
+            });
 
-            await collection.DeleteManyAsync(filter, cancellationToken);
-            await collection.InsertOneAsync(mongoDbSnapshotDataModel, cancellationToken: cancellationToken);
+            List<DynamoDbSnapshotDataModel> dataModels = new List<DynamoDbSnapshotDataModel>();
+
+            do
+            {
+                dataModels.AddRange(await search.GetNextSetAsync(cancellationToken));
+            } while (!search.IsDone);
+
+            var batchWrite = _dynamoDbContext.CreateBatchWrite<DynamoDbSnapshotDataModel>();
+            batchWrite.AddDeleteItems(dataModels);
+            await batchWrite.ExecuteAsync(cancellationToken);
+
+            await _dynamoDbContext.SaveAsync(snapshotDataModel, cancellationToken: cancellationToken);
         }
 
-        public Task DeleteSnapshotAsync(
+        public async Task DeleteSnapshotAsync(
             Type aggregateType,
             IIdentity identity,
             CancellationToken cancellationToken)
         {
-            var collection = _amazonDynamoDb.GetCollection<MongoDbSnapshotDataModel>(SnapShotsCollectionName);
-            var filterBuilder = Builders<MongoDbSnapshotDataModel>.Filter;
 
-            var filter = filterBuilder.Eq(model => model.AggregateName, aggregateType.GetAggregateName().Value) &
-                         filterBuilder.Eq(model => model.AggregateId, identity.Value);
-            return collection.DeleteManyAsync(filter, cancellationToken);
+            var queryFilter = new ScanFilter();
+            queryFilter.AddCondition(nameof(DynamoDbSnapshotDataModel.AggregateName), ScanOperator.Equal, aggregateType.GetAggregateName().Value);
+            queryFilter.AddCondition(nameof(DynamoDbSnapshotDataModel.AggregateId), ScanOperator.Equal, identity.Value);
+
+            var search = _dynamoDbContext.FromScanAsync<DynamoDbSnapshotDataModel>(new ScanOperationConfig
+            {
+                Filter = queryFilter,
+                Limit = 25,
+                ConditionalOperator = ConditionalOperatorValues.And,
+            });
+
+            List<DynamoDbSnapshotDataModel> dataModels = new List<DynamoDbSnapshotDataModel>();
+
+            do
+            {
+                dataModels.AddRange(await search.GetNextSetAsync(cancellationToken));
+            } while (!search.IsDone);
+
+            var batchWrite = _dynamoDbContext.CreateBatchWrite<DynamoDbSnapshotDataModel>();
+            batchWrite.AddDeleteItems(dataModels);
+            await batchWrite.ExecuteAsync(cancellationToken);
         }
 
-        public Task PurgeSnapshotsAsync(CancellationToken cancellationToken)
+        public async Task PurgeSnapshotsAsync(CancellationToken cancellationToken)
         {
-            var collection = _amazonDynamoDb.GetCollection<MongoDbSnapshotDataModel>(SnapShotsCollectionName);
-            var filter = new BsonDocument();
-            return collection.DeleteManyAsync(filter, cancellationToken);
+            var conditions = new List<ScanCondition>();
+            var search = _dynamoDbContext.ScanAsync<DynamoDbSnapshotDataModel>(conditions);
+
+            List<DynamoDbSnapshotDataModel> dataModels = new List<DynamoDbSnapshotDataModel>();
+
+            do
+            {
+                dataModels.AddRange(await search.GetNextSetAsync(cancellationToken));
+            } while (!search.IsDone);
+
+            var batchWrite = _dynamoDbContext.CreateBatchWrite<DynamoDbSnapshotDataModel>();
+            batchWrite.AddDeleteItems(dataModels);
+            await batchWrite.ExecuteAsync(cancellationToken);
         }
 
-        public Task PurgeSnapshotsAsync(
-            Type aggregateType, 
+        public async Task PurgeSnapshotsAsync(
+            Type aggregateType,
             CancellationToken cancellationToken)
         {
-            var collection = _amazonDynamoDb.GetCollection<MongoDbSnapshotDataModel>(SnapShotsCollectionName);
-            var filter = Builders<MongoDbSnapshotDataModel>.Filter.Eq(model => model.AggregateName, aggregateType.GetAggregateName().Value);
-            return collection.DeleteManyAsync(filter, cancellationToken);
-        }        
+            var queryFilter = new ScanFilter();
+            queryFilter.AddCondition(nameof(DynamoDbSnapshotDataModel.AggregateName), ScanOperator.Equal, aggregateType.GetAggregateName().Value);
+
+            var search = _dynamoDbContext.FromScanAsync<DynamoDbSnapshotDataModel>(new ScanOperationConfig
+            {
+                Filter = queryFilter,
+                Limit = 25,
+                ConditionalOperator = ConditionalOperatorValues.And,
+            });
+
+            List<DynamoDbSnapshotDataModel> dataModels = new List<DynamoDbSnapshotDataModel>();
+
+            do
+            {
+                dataModels.AddRange(await search.GetNextSetAsync(cancellationToken));
+            } while (!search.IsDone);
+
+            var batchWrite = _dynamoDbContext.CreateBatchWrite<DynamoDbSnapshotDataModel>();
+            batchWrite.AddDeleteItems(dataModels);
+            await batchWrite.ExecuteAsync(cancellationToken);
+        }
     }
 }
