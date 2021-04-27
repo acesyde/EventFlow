@@ -21,13 +21,27 @@
 // IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 // CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-using System.Threading;
-using System.Threading.Tasks;
+using Amazon.DynamoDBv2.DataModel;
+using EventFlow.ValueObjects;
 
-namespace EventFlow.DynamoDB.EventStore
+namespace EventFlow.DynamoDb.ValueObjects
 {
-    public interface IDynamoDbEventSequenceStore
+    [DynamoDBTable("snapShots")]
+    public class DynamoDbSnapshotDataModel : ValueObject
     {
-        Task<long> GetNextSequenceAsync(string name, CancellationToken cancellationToken);
+        [DynamoDBHashKey]
+        public string Id { get; set; }
+        [DynamoDBVersion]
+        long? Version { get; set; }
+        [DynamoDBProperty]
+        public string AggregateId { get; set; }
+        [DynamoDBProperty]
+        public string AggregateName { get; set; }
+        [DynamoDBProperty]
+        public int AggregateSequenceNumber { get; set; }
+        [DynamoDBProperty]
+        public string Data { get; set; }
+        [DynamoDBProperty]
+        public string Metadata { get; set; }
     }
 }

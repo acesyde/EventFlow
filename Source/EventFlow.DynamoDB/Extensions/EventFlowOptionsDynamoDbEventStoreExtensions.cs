@@ -21,13 +21,18 @@
 // IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 // CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-using System.Threading;
-using System.Threading.Tasks;
+using EventFlow.DynamoDB.EventStore;
+using EventFlow.Extensions;
 
-namespace EventFlow.DynamoDB.EventStore
+namespace EventFlow.DynamoDb.Extensions
 {
-    public interface IDynamoDbEventSequenceStore
+    public static class EventFlowOptionsDynamoDbEventStoreExtensions
     {
-        Task<long> GetNextSequenceAsync(string name, CancellationToken cancellationToken);
+        public static IEventFlowOptions UseDynamoDbEventStore(this IEventFlowOptions eventFlowOptions)
+        {
+
+            return eventFlowOptions.UseEventStore<DynamoDbEventPersistence>()
+                .RegisterServices(f=> f.Register<IDynamoDbEventPersistenceInitializer, DynamoDbEventPersistenceInitializer>());
+        }
     }
 }

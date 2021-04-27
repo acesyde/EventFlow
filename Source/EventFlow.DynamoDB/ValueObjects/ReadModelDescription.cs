@@ -29,18 +29,18 @@ namespace EventFlow.DynamoDB.ValueObjects
 {
     public class ReadModelDescription : ValueObject
     {
-        public ReadModelDescription(RootCollectionName rootTableName)
+        public ReadModelDescription(RootCollectionName tableName)
         {
-            if (rootTableName == null) throw new ArgumentNullException(nameof(rootTableName));
+            if (tableName == null) throw new ArgumentNullException(nameof(tableName));
 
-            RootTableName = rootTableName;
+            TableName = tableName;
         }
 
-        public RootCollectionName RootTableName { get; }
+        public RootCollectionName TableName { get; }
 
         protected override IEnumerable<object> GetEqualityComponents()
         {
-            yield return RootTableName;
+            yield return TableName;
         }
     }
 }

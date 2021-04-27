@@ -27,33 +27,38 @@ using Amazon.DynamoDBv2.Model;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using Amazon.DynamoDBv2.DataModel;
+using EventFlow.DynamoDB.Extensions;
+using EventFlow.DynamoDB.ValueObjects;
 
 namespace EventFlow.DynamoDB.EventStore
 {
     internal class DynamoDbEventSequenceStore : IDynamoDbEventSequenceStore
     {
-        private readonly IDynamoDBContext _amazonDynamoDb;
+        private readonly IAmazonDynamoDB _amazonDynamoDb;
 
         public DynamoDbEventSequenceStore(IAmazonDynamoDB amazonDynamoDb)
         {
-            _amazonDynamoDb = new DynamoDBContext(amazonDynamoDb);
+            _amazonDynamoDb = amazonDynamoDb;
         }
 
-        public async Task<long> GetNextSequenceAsync(CancellationToken cancellationToken)
+        public async Task<long> GetNextSequenceAsync(string name, CancellationToken cancellationToken)
         {
             var itemResponse = await _amazonDynamoDb.UpdateItemAsync(new UpdateItemRequest
             {
-                TableName = _tableName,
-                ReturnValues = ReturnValue.UPDATED_NEW,
+                TableName = DynamoDbExtensions.GetTableName<DynamoDbCounterDataModel>("eventflow.counter"),
                 Key = new Dictionary<string, AttributeValue>
                 {
-                    {"id", new AttributeValue(name)}
+                    { nameof(DynamoDbCounterDataModel.Id), new AttributeValue(name)},
+
                 },
-                UpdateExpression = "ADD seq 1"
+                UpdateExpression = "ADD Seq :q",
+                ExpressionAttributeValues = new Dictionary<string, AttributeValue>
+                {
+                    {":q", new AttributeValue { N = "1"}}
+                }
             }, cancellationToken);
 
-            return Convert.ToInt64(itemResponse.Attributes["seq"].N);
+            return Convert.ToInt64(itemResponse.Attributes[nameof(DynamoDbCounterDataModel.Seq)].N);
         }
     }
 }

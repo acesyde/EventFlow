@@ -29,8 +29,10 @@ using System.Threading.Tasks;
 using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.DataModel;
 using Amazon.DynamoDBv2.DocumentModel;
+using Amazon.DynamoDBv2.Model;
 using EventFlow.Aggregates;
 using EventFlow.Core;
+using EventFlow.DynamoDB.Extensions;
 using EventFlow.DynamoDB.ValueObjects;
 using EventFlow.EventStores;
 using EventFlow.Exceptions;
@@ -57,13 +59,13 @@ namespace EventFlow.DynamoDB.EventStore
                 ? 0
                 : long.Parse(globalPosition.Value);
 
-            var query =new QueryOperationConfig
+            var query = new QueryOperationConfig
             {
                 Limit = pageSize,
-                Filter = new QueryFilter("Id", QueryOperator.GreaterThanOrEqual, startPosition)
+                Filter = new QueryFilter(nameof(DynamoDbEventDataModel.Id), QueryOperator.GreaterThanOrEqual, startPosition)
             };
 
-            var eventDataModels = await DynamoDbEventStoreCollection.FromQueryAsync<DynamoDbEventDataModel>(query)
+            var eventDataModels = await DynamoDbEventStoreContext.FromQueryAsync<DynamoDbEventDataModel>(query)
                 .GetNextSetAsync(cancellationToken)
                 .ConfigureAwait(continueOnCapturedContext: false);
 
@@ -85,7 +87,7 @@ namespace EventFlow.DynamoDB.EventStore
                 .Select(async (e, i) =>
                 {
                     long nextSequence =
-                        await _dynamoDbEventSequenceStore.GetNextSequenceAsync(TableName, cancellationToken);
+                        await _dynamoDbEventSequenceStore.GetNextSequenceAsync(DynamoDbExtensions.GetTableName<DynamoDbEventDataModel>("eventflow.events"), cancellationToken);
 
                     return new DynamoDbEventDataModel
                     {
@@ -106,7 +108,7 @@ namespace EventFlow.DynamoDB.EventStore
             _log.Verbose("Committing {0} events to DynamoDB event store for entity with ID '{1}'", eventDataModels.Count, id);
             try
             {
-                var documentBatchWrite = DynamoDbEventStoreCollection
+                var documentBatchWrite = DynamoDbEventStoreContext
                     .CreateBatchWrite<DynamoDbEventDataModel>();
 
                 documentBatchWrite.AddPutItems(eventDataModels);
@@ -125,11 +127,11 @@ namespace EventFlow.DynamoDB.EventStore
 
         public async Task<IReadOnlyCollection<ICommittedDomainEvent>> LoadCommittedEventsAsync(IIdentity id, int fromEventSequenceNumber, CancellationToken cancellationToken)
         {
-            var queryFilter = new QueryFilter("Id", QueryOperator.Equal, id.Value);
-            queryFilter.AddCondition("AggregateSequenceNumber", QueryOperator.GreaterThanOrEqual,
+            var queryFilter = new QueryFilter(nameof(DynamoDbEventDataModel.Id), QueryOperator.Equal, id.Value);
+            queryFilter.AddCondition(nameof(DynamoDbEventDataModel.AggregateSequenceNumber), QueryOperator.GreaterThanOrEqual,
                 fromEventSequenceNumber);
 
-            return await DynamoDbEventStoreCollection.FromQueryAsync<DynamoDbEventDataModel>(new QueryOperationConfig
+            return await DynamoDbEventStoreContext.FromQueryAsync<DynamoDbEventDataModel>(new QueryOperationConfig
             {
                 Filter = queryFilter
             })
@@ -139,11 +141,32 @@ namespace EventFlow.DynamoDB.EventStore
 
         public async Task DeleteEventsAsync(IIdentity id, CancellationToken cancellationToken)
         {
-            await DynamoDbEventStoreCollection.DeleteAsync<DynamoDbEventDataModel>(id.Value, cancellationToken)
+            var request = new BatchWriteItemRequest
+            {
+                RequestItems = new Dictionary<string, List<WriteRequest>>
+                {
+                    {
+                        DynamoDbExtensions.GetTableName<DynamoDbEventDataModel>("eventflow.events"),
+                        new List<WriteRequest>
+                        {
+                            new WriteRequest(new DeleteRequest
+                            {
+                                Key = new Dictionary<string, AttributeValue>
+                                {
+                                    {nameof(DynamoDbEventDataModel.Id), new AttributeValue {S = id.Value}}
+                                }
+                            })
+                        }
+                    }
+                }
+            };
+
+            var deleteItemResponse = await _dynamoDb.BatchWriteItemAsync(request, cancellationToken)
                 .ConfigureAwait(continueOnCapturedContext: false);
 
-            _log.Verbose("Deleted entity with ID '{0}' by deleting all of its {1} events", id, 1);
+            _log.Verbose("Deleted entity with ID '{0}' by deleting all of its {1} events", id, deleteItemResponse.ItemCollectionMetrics["DeleteItem"].Count);
         }
-        private IDynamoDBContext DynamoDbEventStoreCollection => new DynamoDBContext(_dynamoDb);
+
+        private IDynamoDBContext DynamoDbEventStoreContext => new DynamoDBContext(_dynamoDb);
     }
 }

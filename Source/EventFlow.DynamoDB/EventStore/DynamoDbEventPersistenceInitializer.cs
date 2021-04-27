@@ -26,6 +26,8 @@ using Amazon.DynamoDBv2.Model;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using EventFlow.DynamoDB.Extensions;
+using EventFlow.DynamoDB.ValueObjects;
 
 namespace EventFlow.DynamoDB.EventStore
 {
@@ -42,16 +44,16 @@ namespace EventFlow.DynamoDB.EventStore
         {
             await _amazonDynamoDb.CreateTableAsync(new CreateTableRequest
             {
-                TableName = DynamoDbEventPersistence.TableName,
+                TableName = DynamoDbExtensions.GetTableName<DynamoDbEventDataModel>("eventflow.events"),
                 AttributeDefinitions = new List<AttributeDefinition>
                 {
-                    new AttributeDefinition("AggregateId", ScalarAttributeType.S),
-                    new AttributeDefinition("AggregateSequenceNumber", ScalarAttributeType.S)
+                    new AttributeDefinition(nameof(DynamoDbEventDataModel.AggregateId), ScalarAttributeType.S),
+                    new AttributeDefinition(nameof(DynamoDbEventDataModel.AggregateSequenceNumber), ScalarAttributeType.S)
                 },
                 KeySchema = new List<KeySchemaElement>
                 {
-                    new KeySchemaElement("AggregateId", KeyType.HASH),
-                    new KeySchemaElement("AggregateSequenceNumber", KeyType.HASH)
+                    new KeySchemaElement(nameof(DynamoDbEventDataModel.AggregateId), KeyType.HASH),
+                    new KeySchemaElement(nameof(DynamoDbEventDataModel.AggregateSequenceNumber), KeyType.RANGE)
                 }
             }, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
         }

@@ -68,7 +68,7 @@ namespace EventFlow.DynamoDB.ReadStores
         {
             var readModelDescription = _readModelDescriptionProvider.GetReadModelDescription<TReadModel>();
 
-            _log.Information($"Deleting '{typeof(TReadModel).PrettyPrint()}' with id '{id}', from '{readModelDescription.RootTableName}'!");
+            _log.Information($"Deleting '{typeof(TReadModel).PrettyPrint()}' with id '{id}', from '{readModelDescription.TableName}'!");
 
             await _dynamoDbContext.DeleteAsync<TReadModel>(id, cancellationToken);
         }
@@ -77,9 +77,9 @@ namespace EventFlow.DynamoDB.ReadStores
         {
             var readModelDescription = _readModelDescriptionProvider.GetReadModelDescription<TReadModel>();
 
-            _log.Information($"Deleting ALL '{typeof(TReadModel).PrettyPrint()}' by DROPPING COLLECTION '{readModelDescription.RootTableName}'!");
+            _log.Information($"Deleting ALL '{typeof(TReadModel).PrettyPrint()}' by DROPPING COLLECTION '{readModelDescription.TableName}'!");
 
-            await _amazonDynamoDb.DeleteTableAsync(readModelDescription.RootTableName.Value, cancellationToken);
+            await _amazonDynamoDb.DeleteTableAsync(readModelDescription.TableName.Value, cancellationToken);
         }
 
         public async Task<ReadModelEnvelope<TReadModel>> GetAsync(string id, CancellationToken cancellationToken)
@@ -87,7 +87,7 @@ namespace EventFlow.DynamoDB.ReadStores
             var readModelDescription = _readModelDescriptionProvider.GetReadModelDescription<TReadModel>();
 
             _log.Verbose(() =>
-                $"Fetching read model '{typeof(TReadModel).PrettyPrint()}' with _id '{id}' from collection '{readModelDescription.RootTableName}'");
+                $"Fetching read model '{typeof(TReadModel).PrettyPrint()}' with _id '{id}' from collection '{readModelDescription.TableName}'");
 
             TReadModel result = await _dynamoDbContext.LoadAsync<TReadModel>(id, cancellationToken);
 
@@ -114,7 +114,7 @@ namespace EventFlow.DynamoDB.ReadStores
                     .Distinct()
                     .OrderBy(i => i)
                     .ToList();
-                return $"Updating read models of type '{typeof(TReadModel).PrettyPrint()}' with _ids '{string.Join(", ", readModelIds)}' in collection '{readModelDescription.RootTableName}'";
+                return $"Updating read models of type '{typeof(TReadModel).PrettyPrint()}' with _ids '{string.Join(", ", readModelIds)}' in collection '{readModelDescription.TableName}'";
             });
 
             foreach (var readModelUpdate in readModelUpdates)
